@@ -51,10 +51,9 @@ struct eco_policy_dbs {
 	struct cpufreq_policy *policy;
 	struct eco_tuners tuners;
 	struct mutex timer_mutex;
-	struct work_struct work;
+	struct delayed_work work;
 	struct eco_cpu_stats *cpu_stats; /* Per-CPU stats for this policy */
 	unsigned int down_count;
-	spinlock_t lock;
 };
 
 static void eco_dbs_timer(struct work_struct *work);
@@ -173,7 +172,8 @@ static void eco_dbs_update(struct eco_policy_dbs *dbs)
 static void eco_dbs_timer(struct work_struct *work)
 {
 	struct eco_policy_dbs *dbs =
-		container_of(work, struct eco_policy_dbs, work);
+		container_of(to_delayed_work(work),
+			     struct eco_policy_dbs, work);
 	struct cpufreq_policy *policy = dbs->policy;
 
 	mutex_lock(&dbs->timer_mutex);
@@ -185,16 +185,10 @@ static void eco_dbs_timer(struct work_struct *work)
 
 	eco_dbs_update(dbs);
 
-	/*
-	 * Requeue the work item according to sampling_rate.
-	 * This keeps the governor self-contained, but may be
-	 * switched to a delayed work/timer model if needed.
-	 */
-	schedule_work(&dbs->work);
-	usleep_range(dbs->tuners.sampling_rate,
-		     dbs->tuners.sampling_rate + 1000);
-
 	mutex_unlock(&dbs->timer_mutex);
+
+	schedule_delayed_work(&dbs->work,
+			      usecs_to_jiffies(dbs->tuners.sampling_rate));
 }
 
 static int eco_init(struct cpufreq_policy *policy)
@@ -224,8 +218,7 @@ static int eco_init(struct cpufreq_policy *policy)
 	dbs->policy = policy;
 	dbs->down_count = 0;
 	mutex_init(&dbs->timer_mutex);
-	spin_lock_init(&dbs->lock);
-	INIT_WORK(&dbs->work, eco_dbs_timer);
+	INIT_DELAYED_WORK(&dbs->work, eco_dbs_timer);
 
 	/* Initialize per-CPU accounting state */
 	for_each_cpu(cpu, policy->cpus) {
@@ -251,7 +244,7 @@ static void eco_exit(struct cpufreq_policy *policy)
 	if (!dbs)
 		return;
 
-	cancel_work_sync(&dbs->work);
+	cancel_delayed_work_sync(&dbs->work);
 
 	kfree(dbs->cpu_stats);
 	kfree(dbs);
@@ -266,7 +259,8 @@ static int eco_start(struct cpufreq_policy *policy)
 		return -EINVAL;
 
 	/* Initial activation */
-	schedule_work(&dbs->work);
+	schedule_delayed_work(&dbs->work,
+			      usecs_to_jiffies(dbs->tuners.sampling_rate));
 	return 0;
 }
 
@@ -275,7 +269,7 @@ static void eco_stop(struct cpufreq_policy *policy)
 	struct eco_policy_dbs *dbs = policy->governor_data;
 
 	if (dbs)
-		cancel_work_sync(&dbs->work);
+		cancel_delayed_work_sync(&dbs->work);
 }
 
 static struct cpufreq_governor cpufreq_gov_ecodemand = {
