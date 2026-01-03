@@ -81,6 +81,13 @@ static unsigned int eco_calculate_load(struct eco_policy_dbs *dbs)
 		u64 dt, db;
 
 		cur_idle_time = get_cpu_idle_time(cpu, &cur_wall_time, 1);
+
+    if (cur_idle_time == (u64)-1) {
+        cur_idle_time = get_cpu_idle_time_us(cpu, &cur_wall_time);
+        if (cur_idle_time == (u64)-1) {
+                continue;
+        }
+    }
 		if (cur_wall_time == 0) /* Fallback if arch does not support jiffy-based API */
 			cur_idle_time = get_cpu_idle_time_us(cpu, &cur_wall_time);
 
